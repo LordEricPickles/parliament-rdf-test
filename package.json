@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "audit:high": "npm audit --audit-level=high",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify": "npm run lint && npm run build && npm run audit:high"
   },
   "dependencies": {
     "cytoscape": "3.33.2",

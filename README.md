@@ -16,6 +16,15 @@ npm run build
 npm run preview
 ```
 
+## Verification
+
+```bash
+npm run audit:high
+npm run verify
+```
+
+`npm run build` only compiles the app. `npm run verify` matches the GitHub Pages workflow and runs lint, build, and a high-severity npm audit over the installed dependency tree.
+
 ## Data sources
 
 - `https://members-api.parliament.uk/api/Members/Search`
