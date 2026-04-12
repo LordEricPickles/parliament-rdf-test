@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import cytoscape, { type Core, type ElementDefinition } from 'cytoscape'
+import cytoscape, { type Core, type ElementDefinition, type EventObjectNode } from 'cytoscape'
 import * as $rdf from 'rdflib'
 import './App.css'
 
@@ -192,7 +192,7 @@ function App() {
       },
     })
 
-    cy.on('tap', 'node', (event) => {
+    cy.on('tap', 'node', (event: EventObjectNode) => {
       const nodeId = event.target.id()
       setSelectedNodeId(nodeId)
     })
@@ -532,7 +532,7 @@ async function fetchMemberGraph(rdfUri: string): Promise<GraphModel> {
   await new Promise<void>((resolve, reject) => {
     $rdf.parse(text, store, rdfUri, 'application/ld+json', (error) => {
       if (error) {
-        reject(error)
+        reject(error instanceof Error ? error : new Error(String(error)))
         return
       }
       resolve()
