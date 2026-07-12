@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import cytoscape, { type Core, type ElementDefinition, type EventObjectNode } from 'cytoscape'
 import * as $rdf from 'rdflib'
 import './App.css'
@@ -90,7 +90,7 @@ const SCHEMA_NAME = 'https://id.parliament.uk/schema/name'
 const PARLIAMENT_BASE = 'https://id.parliament.uk/'
 
 function App() {
-  const [query, setQuery] = useState('Truss')
+  const [query, setQuery] = useState('')
   const [searchResults, setSearchResults] = useState<MemberSearchItem[]>([])
   const [searchTotal, setSearchTotal] = useState<number | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
@@ -109,6 +109,15 @@ function App() {
 
   const graphRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
+  const searchControllerRef = useRef<AbortController | null>(null)
+  const selectionRequestRef = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      searchControllerRef.current?.abort()
+      selectionRequestRef.current += 1
+    }
+  }, [])
 
   useEffect(() => {
     if (!graphRef.current || !rdfGraph) {
@@ -236,45 +245,75 @@ function App() {
     return { node, incoming, outgoing }
   }, [rdfGraph, selectedNodeId])
 
-  const runSearch = useCallback(async (nextQuery?: string) => {
-    const term = (nextQuery ?? query).trim()
+  async function runSearch() {
+    const term = query.trim()
     setQuery(term)
-    setSearchLoading(true)
     setSearchError(null)
+    searchControllerRef.current?.abort()
+    searchControllerRef.current = null
+
+    if (!term) {
+      selectionRequestRef.current += 1
+      setSearchLoading(false)
+      setSearchResults([])
+      setSearchTotal(null)
+      setStatusText('Enter a parliamentarian’s name to search.')
+      setSearchError('Enter a name before searching.')
+      return
+    }
+
+    const controller = new AbortController()
+    searchControllerRef.current = controller
+    selectionRequestRef.current += 1
+
+    setSearchLoading(true)
+    setSelectedMember(null)
+    setResolvedMember(null)
+    setPortraitUrl(null)
+    setPortraitError(null)
+    setRdfGraph(null)
+    setGraphError(null)
+    setGraphLoading(false)
+    setSelectedNodeId(null)
+    setStatusText(`Searching for “${term}”…`)
 
     try {
       const url = new URL('https://members-api.parliament.uk/api/Members/Search')
-      if (term.length > 0) {
-        url.searchParams.set('Name', term)
-      }
-      url.searchParams.set('IsCurrentMember', 'false')
+      url.searchParams.set('Name', term)
       url.searchParams.set('take', '10')
 
-      const response = await fetch(url.toString())
+      const response = await fetch(url.toString(), { signal: controller.signal })
       if (!response.ok) {
         throw new Error(`Search request failed with status ${response.status}.`)
       }
 
       const data = (await response.json()) as MembersSearchResponse
-      setSearchResults(data.items ?? [])
+      const results = data.items ?? []
+      setSearchResults(results)
       setSearchTotal(data.totalResults ?? 0)
-      setStatusText(`Loaded ${data.items?.length ?? 0} search results from the Members API.`)
+      setStatusText(results.length > 0
+        ? `Loaded ${results.length} search results from the Members API.`
+        : `No parliamentarians found for “${term}”.`)
     } catch (error) {
+      if (controller.signal.aborted) {
+        return
+      }
       const message = error instanceof Error ? error.message : 'Search failed.'
       setSearchError(message)
       setSearchResults([])
       setSearchTotal(null)
       setStatusText('Member search failed.')
     } finally {
-      setSearchLoading(false)
+      if (searchControllerRef.current === controller) {
+        searchControllerRef.current = null
+        setSearchLoading(false)
+      }
     }
-  }, [query])
-
-  useEffect(() => {
-    void runSearch('Truss')
-  }, [runSearch])
+  }
 
   async function handleSelectMember(member: MemberSearchItem) {
+    const requestId = selectionRequestRef.current + 1
+    selectionRequestRef.current = requestId
     setSelectedMember(member)
     setResolvedMember(null)
     setPortraitUrl(null)
@@ -287,27 +326,41 @@ function App() {
 
     try {
       const resolved = await resolveMemberIdentifiers(member.value.id)
+      if (selectionRequestRef.current !== requestId) {
+        return
+      }
       setResolvedMember(resolved)
       setStatusText(`Resolved RDF URI ${resolved.rdfUri}. Loading JSON-LD graph...`)
 
       const [graph, portrait] = await Promise.all([
         fetchMemberGraph(resolved.rdfUri),
         fetchPortraitUrl(member.value.id).catch((error: unknown) => {
+          if (selectionRequestRef.current !== requestId) {
+            return null
+          }
           const message = error instanceof Error ? error.message : 'Portrait lookup failed.'
           setPortraitError(message)
           return null
         }),
       ])
 
+      if (selectionRequestRef.current !== requestId) {
+        return
+      }
       setRdfGraph(graph)
       setPortraitUrl(portrait)
       setStatusText(`Rendered ${graph.statementCount} RDF triples for ${member.value.nameDisplayAs ?? member.value.nameListAs}.`)
     } catch (error) {
+      if (selectionRequestRef.current !== requestId) {
+        return
+      }
       const message = error instanceof Error ? error.message : 'Unable to load the selected member.'
       setGraphError(message)
       setStatusText(message)
     } finally {
-      setGraphLoading(false)
+      if (selectionRequestRef.current === requestId) {
+        setGraphLoading(false)
+      }
     }
   }
 
@@ -360,6 +413,12 @@ function App() {
           </div>
 
           <div className="results-list">
+            {!searchLoading && searchTotal === 0 ? (
+              <p className="muted results-message">No matching parliamentarians found.</p>
+            ) : null}
+            {!searchLoading && searchTotal === null && !searchError ? (
+              <p className="muted results-message">Enter a name and select Search to find a parliamentarian.</p>
+            ) : null}
             {searchResults.map((result) => {
               const isActive = selectedMember?.value.id === result.value.id
               return (
